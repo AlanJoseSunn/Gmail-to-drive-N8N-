@@ -1,0 +1,80 @@
+// Prepare Email (Run Once for All Items)
+const input = items[0] || {};
+const jsonIn = input.json || {};
+const binaryIn = input.binary || {};
+
+// Robust sender/name extraction (handles strings, objects or Gmail output variations)
+function extractSenderName(json) {
+  // common places
+  const candidates = [
+    json.fromName,
+    json.senderName,
+    json.from,
+    json.headers?.From,
+    json.fromFull,
+    json.from?.value,
+    json?.payload?.headers?.find(h => h.name === 'From')?.value,
+    json?.snippet,
+  ];
+
+  for (const c of candidates) {
+    if (!c) continue;
+    // if it's an array (Gmail sometimes stores as [{name, address}])
+    if (Array.isArray(c) && c.length && c[0].name) return String(c[0].name).trim();
+    // if it's an object with name
+    if (typeof c === 'object') {
+      if (c.name) return String(c.name).trim();
+      if (c.value && Array.isArray(c.value) && c.value[0] && c.value[0].name) return String(c.value[0].name).trim();
+      // if object is like {address:..., name:...}
+      if (c.address) return String(c.address).trim();
+      continue;
+    }
+    // if string, extract name before <email@...>
+    if (typeof c === 'string') {
+      const m = c.match(/^(.*?)(?:\s*<.*>)?$/);
+      if (m && m[1]) return m[1].trim();
+      return c.trim();
+    }
+  }
+  return 'client';
+}
+
+let sender = extractSenderName(jsonIn);
+if (!sender) sender = 'client';
+
+// make safe folder base
+const timeStamp = new Date().toISOString().replace(/[:.]/g,'-');
+const folderBase = String(sender).replace(/[\/\\#%&{}<>*? $!:]/g,'_').slice(0,120);
+const folderName = `${folderBase}_${timeStamp}`;
+
+// get email text (try fields commonly present)
+let emailText = jsonIn.plainText || jsonIn.text || jsonIn.bodyPlain || jsonIn.html || jsonIn.snippet || '';
+if (!emailText && jsonIn.html) emailText = jsonIn.html;
+if (!emailText) emailText = '(no body)';
+
+// build binary for email text (base64)
+const emailBufferBase64 = Buffer.from(emailText, 'utf8').toString('base64');
+
+// build output item (single item)
+// includes json.folderName so Create folder node can use it
+const outItem = {
+  json: {
+    folderName,
+    fileName: 'email.txt',
+  },
+  binary: {
+    emailTxt: {
+      data: emailBufferBase64,
+      fileName: 'email.txt',
+      mimeType: 'text/plain',
+    },
+  },
+};
+
+// copy through any incoming binary attachments (so they exist in same item)
+for (const k of Object.keys(binaryIn)) {
+  if (k === 'emailTxt') continue;
+  outItem.binary[k] = binaryIn[k];
+}
+
+return [outItem];

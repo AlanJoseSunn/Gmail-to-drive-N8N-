@@ -1,0 +1,105 @@
+// Build array of upload items (Run Once for All Items)
+const all = items || [];
+
+// helper: find binary key on an item and return the piece object
+function firstBinaryPiece(it) {
+  if (!it || !it.binary) return null;
+  const keys = Object.keys(it.binary);
+  if (!keys.length) return null;
+  return { key: keys[0], piece: it.binary[keys[0]] };
+}
+
+// We'll support two scenarios:
+// A) the input item already contains json + multiple binary fields -> create multiple output items from that one input
+// B) the input is an array of json-only + separate binary-only items (we handle the common cases too)
+
+const out = [];
+
+// Case A: if there is a single input item that contains both json and many binaries
+if (all.length === 1 && all[0].json && all[0].binary) {
+  const input = all[0];
+  const folderId = input.json && (input.json.folderId || input.json.id) ? (input.json.folderId || input.json.id) : null;
+
+  // first, add emailTxt if present
+  if (input.binary.emailTxt) {
+    out.push({
+      json: { fileName: input.binary.emailTxt.fileName || 'email.txt', folderId },
+      binary: { data: input.binary.emailTxt },
+    });
+  }
+
+  // then attachments (every other binary key)
+  for (const k of Object.keys(input.binary)) {
+    if (k === 'emailTxt') continue;
+    const piece = input.binary[k];
+    if (!piece) continue;
+    out.push({
+      json: { fileName: piece.fileName || k, folderId },
+      binary: { data: piece },
+    });
+  }
+
+  return out;
+}
+
+// Case B: multiple items - try to match json-only items with binary-only items by filename
+// Build lists
+const jsonOnly = [];
+const binOnly = [];
+
+for (const it of all) {
+  const hasJson = it.json && Object.keys(it.json).length > 0;
+  const hasBin = it.binary && Object.keys(it.binary).length > 0;
+  if (hasJson && !hasBin) jsonOnly.push(it);
+  else if (!hasJson && hasBin) binOnly.push(it);
+}
+
+// normalize bin pieces
+const binPieces = [];
+for (const b of binOnly) {
+  const fk = Object.keys(b.binary)[0];
+  if (!fk) continue;
+  binPieces.push(b.binary[fk]);
+}
+
+// helper to find binary by filename
+let usedIdx = 0;
+function getBinForName(name) {
+  if (!name) {
+    if (usedIdx < binPieces.length) return binPieces[usedIdx++];
+    return null;
+  }
+  for (let i = 0; i < binPieces.length; i++) {
+    if ((binPieces[i].fileName || '') === name) {
+      return binPieces.splice(i,1)[0];
+    }
+  }
+  if (usedIdx < binPieces.length) return binPieces[usedIdx++];
+  return null;
+}
+
+// Merge jsonOnly with binPieces
+for (const j of jsonOnly) {
+  const targetName = j.json.fileName || j.json.name || null;
+  const folderId = j.json.folderId || j.json.id || null;
+  const piece = getBinForName(targetName);
+  if (piece) {
+    out.push({
+      json: { fileName: piece.fileName || targetName || 'file', folderId },
+      binary: { data: piece },
+    });
+  } else {
+    // if no binary found, produce a json-only item (optional)
+    out.push({ json: { ...j.json } });
+  }
+}
+
+// If leftover binary pieces, add them
+for (const leftover of binPieces.slice(usedIdx)) {
+  out.push({
+    json: { fileName: leftover.fileName || 'file', folderId: null },
+    binary: { data: leftover },
+  });
+}
+
+return out;
